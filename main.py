@@ -1,6 +1,8 @@
+import json
 import os
 import random
 from datetime import datetime, date
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
@@ -8,6 +10,7 @@ import requests
 VK_API = "https://api.vk.com/method"
 VK_VERSION = "5.199"
 MOSCOW = ZoneInfo("Europe/Moscow")
+HISTORY_FILE = Path("post_history.json")
 
 STARTERS = [
     "Эй, ты", "Слушай сюда", "Запомни, боец", "Ну-ка соберись",
@@ -62,21 +65,45 @@ ENDINGS = [
     "пусть сегодня будет чуть легче, чем вчера.",
     "и да, у тебя всё ещё может охуенно получиться.",
 ]
+HASHTAGS = [
+    "#НеКисни", "#ЖивиНаПолную", "#СилаВнутри", "#ДержисьБоец",
+    "#СамПоддержиСебя", "#БезСамосаботажа", "#ВсёБудетНормально",
+    "#ШагЗаШагом", "#НастройНаПобеду", "#ХарактерЕсть",
+    "#ЖизньПродолжается", "#ВремяДляСебя", "#НеСдавайся",
+    "#ПофигНаНегатив", "#ВперёдИТолько", "#ПоддержкаСЮмором",
+    "#ДеньЗаДнём", "#Смелее", "#ТыСправишься", "#Выдохни",
+    "#МотивацияБезСахара", "#БудьСобой", "#Соберись",
+    "#ПозитивСМатом", "#СильнееЧемКажется", "#НовыйДень",
+]
 
-def make_post(day: date) -> str:
-    # Deterministic daily selection; combinations provide thousands of distinct posts.
+def load_history():
+    if not HISTORY_FILE.exists():
+        return {"posts": [], "dates": []}
+    with HISTORY_FILE.open("r", encoding="utf-8") as file:
+        data = json.load(file)
+    data.setdefault("posts", [])
+    data.setdefault("dates", [])
+    return data
+
+def make_post(day: date, used_posts: set[str]) -> str:
+    # Перебираем разные комбинации и никогда не выбираем уже использованный текст.
     seed = day.toordinal()
     rng = random.Random(seed)
-    starter = STARTERS[(seed * 7) % len(STARTERS)]
-    action = ACTIONS[(seed * 13 + 3) % len(ACTIONS)]
-    ending = ENDINGS[(seed * 17 + 5) % len(ENDINGS)]
-    # Keep the post to one sentence while varying its construction.
-    variants = [
-        f"{starter}, {action}, потому что {ending}",
-        f"{starter}: {action} — {ending}",
-        f"{starter}, {action}; {ending}",
+    candidates = [
+        f"{starter}, {action}, потому что {ending}"
+        for starter in STARTERS
+        for action in ACTIONS
+        for ending in ENDINGS
     ]
-    return rng.choice(variants)
+    rng.shuffle(candidates)
+    for candidate in candidates:
+        if candidate not in used_posts:
+            return candidate
+    raise RuntimeError("Закончились уникальные комбинации постов — добавьте новые фразы в словари.")
+
+def make_hashtags(day: date) -> list[str]:
+    rng = random.Random(day.toordinal() * 7919)
+    return rng.sample(HASHTAGS, 3)
 
 def vk_call(method: str, token: str, **params):
     response = requests.post(
@@ -95,11 +122,18 @@ def main():
     token = os.environ["VK_ACCESS_TOKEN"]
     group_id = int(os.environ.get("VK_GROUP_ID", "117734286"))
     today = datetime.now(MOSCOW).date()
-    message = make_post(today)
+    history = load_history()
 
-    # Group tokens can publish to the wall but cannot use wall.get to read it.
-    # Publish directly; this avoids VK error 27 from group authorization.
+    if today.isoformat() in history["dates"]:
+        print(f"Пост за {today.isoformat()} уже публиковался. Повтор пропущен.")
+        return
 
+    used_posts = set(history["posts"])
+    post_text = make_post(today, used_posts)
+    hashtags = make_hashtags(today)
+    message = post_text + "\n\n" + " ".join(hashtags)
+
+    # Групповой токен может публиковать на стене, но не читать её через wall.get.
     result = vk_call(
         "wall.post",
         token,
@@ -107,6 +141,12 @@ def main():
         from_group=1,
         message=message,
     )
+
+    history["posts"].append(post_text)
+    history["dates"].append(today.isoformat())
+    with HISTORY_FILE.open("w", encoding="utf-8") as file:
+        json.dump(history, file, ensure_ascii=False, indent=2)
+
     print(f"Опубликовано: {today.isoformat()}, post_id={result.get('post_id')}")
     print(message)
 
