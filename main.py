@@ -143,7 +143,7 @@ def main():
     used_posts = set(history["posts"])
     post_text = make_post(today, used_posts, slot_index)
     hashtags = make_hashtags(today, slot_index)
-    message = post_text + "\\n\\n" + " ".join(hashtags)
+    message = post_text + "\n\n" + " ".join(hashtags)
 
     # Групповой токен может публиковать на стене, но не читать её через wall.get.
     result = vk_call(
