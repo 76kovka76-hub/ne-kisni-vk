@@ -97,11 +97,8 @@ def main():
     today = datetime.now(MOSCOW).date()
     message = make_post(today)
 
-    # Prevent accidental duplicate posts if the workflow is manually rerun.
-    recent = vk_call("wall.get", token, owner_id=-group_id, count=20, filter="owner")["items"]
-    if any(item.get("text") == message for item in recent):
-        print(f"Пост за {today.isoformat()} уже найден на стене — повторно не публикую.")
-        return
+    # Group tokens can publish to the wall but cannot use wall.get to read it.
+    # Publish directly; this avoids VK error 27 from group authorization.
 
     result = vk_call(
         "wall.post",
