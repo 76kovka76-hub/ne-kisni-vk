@@ -85,9 +85,9 @@ def load_history():
     data.setdefault("dates", [])
     return data
 
-def make_post(day: date, used_posts: set[str]) -> str:
-    # Перебираем разные комбинации и никогда не выбираем уже использованный текст.
-    seed = day.toordinal()
+def make_post(day: date, used_posts: set[str], slot_index: int = 0) -> str:
+    # Для каждого временного слота — отдельная последовательность уникальных фраз.
+    seed = day.toordinal() * 100 + slot_index
     rng = random.Random(seed)
     candidates = [
         f"{starter}, {action}, потому что {ending}"
@@ -101,8 +101,8 @@ def make_post(day: date, used_posts: set[str]) -> str:
             return candidate
     raise RuntimeError("Закончились уникальные комбинации постов — добавьте новые фразы в словари.")
 
-def make_hashtags(day: date) -> list[str]:
-    rng = random.Random(day.toordinal() * 7919)
+def make_hashtags(day: date, slot_index: int = 0) -> list[str]:
+    rng = random.Random(day.toordinal() * 7919 + slot_index)
     return rng.sample(HASHTAGS, 3)
 
 def vk_call(method: str, token: str, **params):
@@ -121,17 +121,29 @@ def vk_call(method: str, token: str, **params):
 def main():
     token = os.environ["VK_ACCESS_TOKEN"]
     group_id = int(os.environ.get("VK_GROUP_ID", "117734286"))
-    today = datetime.now(MOSCOW).date()
+    now = datetime.now(MOSCOW)
+    today = now.date()
     history = load_history()
+    history.setdefault("published_slots", [])
 
-    if today.isoformat() in history["dates"]:
-        print(f"Пост за {today.isoformat()} уже публиковался. Повтор пропущен.")
+    # 10 публикаций в день: 08:00–21:30, интервал 90 минут (Москва).
+    schedule_minutes = [480, 570, 660, 750, 840, 930, 1020, 1110, 1200, 1290]
+    current_minute = now.hour * 60 + now.minute
+    if current_minute in schedule_minutes:
+        slot_index = schedule_minutes.index(current_minute)
+        slot_name = f"{today.isoformat()}-{slot_index:02d}"
+    else:
+        slot_index = 100 + current_minute
+        slot_name = f"{today.isoformat()}-manual-{now.strftime('%H%M')}"
+
+    if slot_name in history["published_slots"]:
+        print(f"Слот {slot_name} уже опубликован. Повтор пропущен.")
         return
 
     used_posts = set(history["posts"])
-    post_text = make_post(today, used_posts)
-    hashtags = make_hashtags(today)
-    message = post_text + "\n\n" + " ".join(hashtags)
+    post_text = make_post(today, used_posts, slot_index)
+    hashtags = make_hashtags(today, slot_index)
+    message = post_text + "\\n\\n" + " ".join(hashtags)
 
     # Групповой токен может публиковать на стене, но не читать её через wall.get.
     result = vk_call(
@@ -143,7 +155,9 @@ def main():
     )
 
     history["posts"].append(post_text)
-    history["dates"].append(today.isoformat())
+    history["published_slots"].append(slot_name)
+    if today.isoformat() not in history["dates"]:
+        history["dates"].append(today.isoformat())
     with HISTORY_FILE.open("w", encoding="utf-8") as file:
         json.dump(history, file, ensure_ascii=False, indent=2)
 
